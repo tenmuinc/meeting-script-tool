@@ -14,29 +14,30 @@
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
 
-    // Notion REST API でクライアント一覧を取得
-    async function fetchClientsFromNotion(notionToken) {
-      if (!notionToken) return [];
+    // Notion MCP経由でクライアント一覧を取得
+    async function fetchClientsFromNotion(apiKey, notionToken) {
+      if (!apiKey || !notionToken) return { list: [], error: "APIキーまたはNotionトークンが未設定です" };
       try {
-        const res = await fetch("https://api.notion.com/v1/databases/33f6bc5f36614b19a47adac4d778f3ff/query", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${notionToken}`,
-            "Notion-Version": "2022-06-28",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ page_size: 100 }),
+        const data = await callClaude(apiKey, [
+          {
+            role: "user",
+            content: `Notionのデータベース（ID: 33f6bc5f36614b19a47adac4d778f3ff）の全ページタイトルを取得して、必ずJSON配列のみを返してください。例: ["クライアントA", "クライアントB"]`,
+          }
+        ], {
+          mcp_servers: [{
+            type: "url",
+            url: "https://mcp.notion.com/mcp",
+            name: "notion-mcp",
+            authorization_token: notionToken,
+          }],
+          max_tokens: 2000,
         });
-        if (!res.ok) throw new Error(`Notion API error: ${res.status}`);
-        const data = await res.json();
-        return data.results.map(page => {
-          const props = page.properties;
-          const titleProp = Object.values(props).find(p => p.type === "title");
-          return titleProp?.title?.[0]?.plain_text || "";
-        }).filter(Boolean).sort();
+        const text = data.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+        const match = text.match(/\[[\s\S]*?\]/);
+        if (match) return { list: JSON.parse(match[0]).filter(Boolean).sort(), error: null };
+        return { list: [], error: "Notionから一覧を取得できませんでした: " + text.substring(0, 100) };
       } catch (e) {
-        console.error("Notion fetch error:", e);
-        return [];
+        return { list: [], error: e.message };
       }
     }
 
@@ -117,14 +118,19 @@
         localStorage.setItem("notion_token", token);
       };
 
-      const loadClients = async (nt) => {
-        if (!nt) return;
+      const [clientError, setClientError] = useState("");
+
+      const loadClients = async (ak, nt) => {
+        if (!ak || !nt) return;
         setClientsLoading(true);
-        const list = await fetchClientsFromNotion(nt);
+        setClientError("");
+        const { list, error } = await fetchClientsFromNotion(ak, nt);
         if (list.length > 0) {
           setClientList(list);
           setClientName(list[0]);
           localStorage.setItem("client_list_cache", JSON.stringify(list));
+        } else if (error) {
+          setClientError(error);
         }
         setClientsLoading(false);
       };
@@ -136,8 +142,9 @@
           setClientList(list);
           setClientName(list[0]);
         } else {
+          const ak = localStorage.getItem("anthropic_api_key") || "";
           const nt = localStorage.getItem("notion_token") || "";
-          loadClients(nt);
+          loadClients(ak, nt);
         }
       }, []);
 
@@ -303,7 +310,7 @@ ${script}
                       if (notionToken) {
                         setEditingNotionToken(false);
                         localStorage.removeItem("client_list_cache");
-                        loadClients(notionToken);
+                        loadClients(apiKey, notionToken);
                       }
                     }}
                     placeholder="ntn_..."
@@ -321,7 +328,7 @@ ${script}
               {!editingApiKey && !editingNotionToken && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button
-                    onClick={() => { localStorage.removeItem("client_list_cache"); loadClients(notionToken); }}
+                    onClick={() => { localStorage.removeItem("client_list_cache"); loadClients(apiKey, notionToken); }}
                     disabled={clientsLoading}
                     style={{ fontSize: 11, color: "#888", background: "none", border: "1px solid #e0ddd6", borderRadius: 6, cursor: "pointer", padding: "4px 10px" }}
                   >
@@ -386,9 +393,11 @@ ${script}
                           style={{ ...inputStyle, cursor: "text" }}
                         />
                       )}
-                    </label>
-                    <label style={{ display: "block" }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 6 }}>対象月</div>
+                      {clientError && (
+                        <div style={{ marginTop: 6, fontSize: 11, color: "#b91c1c", background: "#fef2f2", padding: "6px 10px", borderRadius: 6 }}>
+                          ⚠️ {clientError}
+                        </div>
+                      )}
                       <select
                         value={targetMonth}
                         onChange={(e) => setTargetMonth(e.target.value)}
