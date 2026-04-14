@@ -14,28 +14,25 @@
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
 
-    // Notion MCP経由でクライアント一覧を取得
-    async function fetchClientsFromNotion(apiKey, notionToken) {
-      if (!apiKey || !notionToken) return { list: [], error: "APIキーまたはNotionトークンが未設定です" };
+    // Cloudflare Worker経由でNotionからクライアント一覧を取得
+    async function fetchClientsFromNotion(notionToken) {
+      if (!notionToken) return { list: [], error: "Notionトークンが未設定です" };
       try {
-        const data = await callClaude(apiKey, [
+        const res = await fetch(
+          "https://notion-proxy.y-amano.workers.dev?database_id=33f6bc5f36614b19a47adac4d778f3ff",
           {
-            role: "user",
-            content: `Notionのデータベース（ID: 33f6bc5f36614b19a47adac4d778f3ff）の全ページタイトルを取得して、必ずJSON配列のみを返してください。例: ["クライアントA", "クライアントB"]`,
+            method: "GET",
+            headers: { "x-notion-token": notionToken },
           }
-        ], {
-          mcp_servers: [{
-            type: "url",
-            url: "https://mcp.notion.com/mcp",
-            name: "notion-mcp",
-            authorization_token: notionToken,
-          }],
-          max_tokens: 2000,
-        });
-        const text = data.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-        const match = text.match(/\[[\s\S]*?\]/);
-        if (match) return { list: JSON.parse(match[0]).filter(Boolean).sort(), error: null };
-        return { list: [], error: "Notionから一覧を取得できませんでした: " + text.substring(0, 100) };
+        );
+        if (!res.ok) throw new Error(`Proxy error: ${res.status}`);
+        const data = await res.json();
+        const list = data.results.map(page => {
+          const props = page.properties;
+          const titleProp = Object.values(props).find(p => p.type === "title");
+          return titleProp?.title?.[0]?.plain_text || "";
+        }).filter(Boolean).sort();
+        return { list, error: list.length === 0 ? "クライアントが見つかりませんでした" : null };
       } catch (e) {
         return { list: [], error: e.message };
       }
@@ -126,11 +123,11 @@
 
       const [clientError, setClientError] = useState("");
 
-      const loadClients = async (ak, nt) => {
-        if (!ak || !nt) return;
+      const loadClients = async (nt) => {
+        if (!nt) return;
         setClientsLoading(true);
         setClientError("");
-        const { list, error } = await fetchClientsFromNotion(ak, nt);
+        const { list, error } = await fetchClientsFromNotion(nt);
         if (list.length > 0) {
           setClientList(list);
           setClientName(list[0]);
@@ -150,7 +147,7 @@
         } else {
           const ak = localStorage.getItem("anthropic_api_key") || "";
           const nt = localStorage.getItem("notion_token") || "";
-          loadClients(ak, nt);
+          loadClients(nt);
         }
       }, []);
 
@@ -316,7 +313,7 @@ ${script}
                       if (notionToken) {
                         setEditingNotionToken(false);
                         localStorage.removeItem("client_list_cache");
-                        loadClients(apiKey, notionToken);
+                        loadClients(notionToken);
                       }
                     }}
                     placeholder="ntn_..."
@@ -334,7 +331,7 @@ ${script}
               {!editingApiKey && !editingNotionToken && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button
-                    onClick={() => { localStorage.removeItem("client_list_cache"); loadClients(apiKey, notionToken); }}
+                    onClick={() => { localStorage.removeItem("client_list_cache"); loadClients(notionToken); }}
                     disabled={clientsLoading}
                     style={{ fontSize: 11, color: "#888", background: "none", border: "1px solid #e0ddd6", borderRadius: 6, cursor: "pointer", padding: "4px 10px" }}
                   >
