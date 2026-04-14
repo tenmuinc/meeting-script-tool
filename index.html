@@ -15,8 +15,8 @@
     const { useState, useRef, useEffect } = React;
 
     // Claude + Notion MCP経由でクライアント一覧を取得
-    async function fetchClientsFromNotion(apiKey, notionToken) {
-      if (!apiKey || !notionToken) return [];
+    async function fetchClientsFromNotion(apiKey) {
+      if (!apiKey) return [];
       try {
         const data = await callClaude(apiKey, [
           {
@@ -24,12 +24,7 @@
             content: `Notionのデータベース（ID: 33f6bc5f36614b19a47adac4d778f3ff）の全ページタイトルを取得して、必ずJSON配列のみを返してください。例: ["クライアントA", "クライアントB"]`,
           }
         ], {
-          mcp_servers: [{
-            type: "url",
-            url: "https://mcp.notion.com/mcp",
-            name: "notion-mcp",
-            authorization_token: notionToken,
-          }],
+          mcp_servers: [{ type: "url", url: "https://mcp.notion.com/mcp", name: "notion-mcp" }],
           max_tokens: 1000,
         });
         const text = data.content.filter((b) => b.type === "text").map((b) => b.text).join("");
@@ -37,6 +32,7 @@
         if (match) return JSON.parse(match[0]).filter(Boolean).sort();
         return [];
       } catch (e) {
+        console.error("fetchClientsFromNotion error:", e);
         return [];
       }
     }
@@ -118,10 +114,10 @@
         localStorage.setItem("notion_token", token);
       };
 
-      const loadClients = async (ak, nt) => {
-        if (!ak || !nt) return;
+      const loadClients = async (ak) => {
+        if (!ak) return;
         setClientsLoading(true);
-        const list = await fetchClientsFromNotion(ak, nt);
+        const list = await fetchClientsFromNotion(ak);
         if (list.length > 0) {
           setClientList(list);
           setClientName(list[0]);
@@ -138,8 +134,7 @@
           setClientName(list[0]);
         } else {
           const ak = localStorage.getItem("anthropic_api_key") || "";
-          const nt = localStorage.getItem("notion_token") || "";
-          loadClients(ak, nt);
+          loadClients(ak);
         }
       }, []);
 
@@ -305,7 +300,7 @@ ${script}
                       if (notionToken) {
                         setEditingNotionToken(false);
                         localStorage.removeItem("client_list_cache");
-                        loadClients(apiKey, notionToken);
+                        loadClients(apiKey);
                       }
                     }}
                     placeholder="ntn_..."
@@ -323,7 +318,7 @@ ${script}
               {!editingApiKey && !editingNotionToken && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button
-                    onClick={() => { localStorage.removeItem("client_list_cache"); loadClients(apiKey, notionToken); }}
+                    onClick={() => { localStorage.removeItem("client_list_cache"); loadClients(apiKey); }}
                     disabled={clientsLoading}
                     style={{ fontSize: 11, color: "#888", background: "none", border: "1px solid #e0ddd6", borderRadius: 6, cursor: "pointer", padding: "4px 10px" }}
                   >
