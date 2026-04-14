@@ -168,6 +168,16 @@
         reader.readAsDataURL(file);
       };
 
+      const handleDrop = (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (!file || file.type !== "application/pdf") return;
+        setPdfName(file.name);
+        const reader = new FileReader();
+        reader.onload = (ev) => setPdfBase64(ev.target.result.split(",")[1]);
+        reader.readAsDataURL(file);
+      };
+
       const generateScript = async () => {
         setLoading(true);
         setError("");
@@ -185,16 +195,21 @@
                 {
                   type: "text",
                   text: `あなたはSNSマーケティングの定例会で使う台本を作成する専門家です。
-添付のInstagramパフォーマンスレポート（クライアント：${clientName}、対象月：${targetMonth}）を読み込み、レポートの各ページごとに担当者が話す台本を作成してください。
+添付のInstagramパフォーマンスレポート（クライアント：${clientName}、対象月：${targetMonth}）を読み込み、定例会で担当者が話す台本を作成してください。
 
-台本の形式ルール：
-- 各ページは「## 【Pページ番号】ページタイトル」という見出しで始める
-- そのページの内容を説明する話し言葉の台本を「」（鍵括弧）で囲んで書く
-- 数字（KPI等）は具体的に言及する
-- 前月比・目標対比に必ず触れる
-- 改善アクションページでは具体的な提案を含める
-- 担当者が読み上げやすい自然な話し言葉にする
-- ページ番号はPDFのページ順に振る`,
+【台本作成の方針】
+- 単なる数字の読み上げではなく「この数字が意味すること・なぜ重要か」を言語化する
+- 前月比・目標対比を必ず取り上げ、良い点は自信を持って、課題は原因と改善策とセットで伝える
+- 数字的根拠を必ずメインに据え、「〇〇が△△%増加した理由は〜」という形で説明する
+- クライアントが「なるほど」と感じる洞察・示唆を必ず含める
+- 次月に向けた具体的なアクション提案を含める
+- 担当者がそのまま読み上げられる自然な話し言葉で書く
+
+【台本の形式】
+- 各セクションは「## 【Pページ番号】ページタイトル」で始める
+- 話す内容は「」（鍵括弧）で囲む
+- 数字は具体的に（例：「先月比で+15%の伸び」）
+- 1ページあたり3〜5文程度でテンポよく`,
                 },
               ],
             },
@@ -245,7 +260,12 @@ ${script}
               },
             ],
             {
-              mcp_servers: NOTION_MCP,
+              mcp_servers: [{
+                type: "url",
+                url: "https://mcp.notion.com/mcp",
+                name: "notion-mcp",
+                authorization_token: notionToken,
+              }],
               max_tokens: 4000,
             }
           );
@@ -372,9 +392,9 @@ ${script}
               {/* Step 0: Settings */}
               {step === 0 && (
                 <div>
-                  <h2 style={{ fontSize: 16, fontWeight: 700, marginTop: 0, marginBottom: 24, color: "#1a1a1a" }}>① クライアント・対象月を設定</h2>
-                  <div style={{ display: "grid", gap: 16 }}>
-                    <label style={{ display: "block" }}>
+                  <h2 style={{ fontSize: 16, fontWeight: 700, marginTop: 0, marginBottom: 24, color: "#1a1a1a" }}>① クライアント・台本が欲しい月を選択</h2>
+                  <div style={{ display: "grid", gap: 0 }}>
+                    <label style={{ display: "block", marginBottom: 24 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 6 }}>クライアント名</div>
                       {clientsLoading ? (
                         <select style={inputStyle} disabled>
@@ -402,6 +422,9 @@ ${script}
                           ⚠️ {clientError}
                         </div>
                       )}
+                    </label>
+                    <label style={{ display: "block" }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 6 }}>対象月</div>
                       <select
                         value={targetMonth}
                         onChange={(e) => setTargetMonth(e.target.value)}
@@ -435,6 +458,8 @@ ${script}
                   </div>
                   <div
                     onClick={() => fileRef.current.click()}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={handleDrop}
                     style={{
                       border: "2px dashed " + (pdfBase64 ? "#1a1a1a" : "#d0cdc6"),
                       borderRadius: 12, padding: "40px 24px", textAlign: "center", cursor: "pointer",
@@ -450,7 +475,7 @@ ${script}
                       </div>
                     ) : (
                       <div>
-                        <div style={{ fontWeight: 600, color: "#555", marginBottom: 4 }}>PDFをクリックして選択</div>
+                        <div style={{ fontWeight: 600, color: "#555", marginBottom: 4 }}>PDFをドラッグ＆ドロップ またはクリックして選択</div>
                         <div style={{ fontSize: 12, color: "#999" }}>Instagramパフォーマンスレポート</div>
                       </div>
                     )}
