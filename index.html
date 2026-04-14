@@ -7,19 +7,37 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="config.js"></script>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useRef } = React;
+    const { useState, useRef, useEffect } = React;
 
-    // ========== 設定: クライアント一覧 ==========
-    const CLIENT_LIST = [
-      "ポンパドール",
-      // 必要に応じてクライアントを追加
-      // "クライアントB",
-      // "クライアントC",
-    ];
+    // Notionからクライアント一覧を取得
+    async function fetchClientsFromNotion() {
+      const token = (typeof CONFIG !== "undefined" && CONFIG.NOTION_TOKEN) || "";
+      if (!token || token.includes("ここに")) return [];
+      const dbId = "33f6bc5f36614b19a47adac4d778f3ff";
+      const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Notion-Version": "2022-06-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ page_size: 100 }),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.results
+        .map((p) => {
+          const titleProp = Object.values(p.properties).find((v) => v.type === "title");
+          return titleProp?.title?.[0]?.plain_text || "";
+        })
+        .filter(Boolean)
+        .sort();
+    }
 
     // ========== 設定: 対象月一覧（直近24ヶ月）==========
     const MONTH_LIST = (() => {
@@ -75,7 +93,8 @@
     function App() {
       const [step, setStep] = useState(0);
       const [apiKey, setApiKey] = useState(localStorage.getItem("anthropic_api_key") || "");
-      const [clientName, setClientName] = useState(CLIENT_LIST[0]);
+      const [clientList, setClientList] = useState([]);
+      const [clientName, setClientName] = useState("");
       const [targetMonth, setTargetMonth] = useState(MONTH_LIST[1]); // 先月をデフォルト
       const [pdfBase64, setPdfBase64] = useState(null);
       const [pdfName, setPdfName] = useState("");
@@ -86,6 +105,15 @@
       const [notionResult, setNotionResult] = useState("");
       const [logs, setLogs] = useState([]);
       const fileRef = useRef();
+
+      useEffect(() => {
+        fetchClientsFromNotion().then((list) => {
+          if (list.length > 0) {
+            setClientList(list);
+            setClientName(list[0]);
+          }
+        });
+      }, []);
 
       const addLog = (msg) => setLogs((p) => [...p, { t: new Date().toLocaleTimeString("ja-JP"), msg }]);
 
@@ -267,10 +295,12 @@ ${script}
                         value={clientName}
                         onChange={(e) => setClientName(e.target.value)}
                         style={inputStyle}
+                        disabled={clientList.length === 0}
                       >
-                        {CLIENT_LIST.map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
+                        {clientList.length === 0
+                          ? <option>読み込み中...</option>
+                          : clientList.map((c) => <option key={c} value={c}>{c}</option>)
+                        }
                       </select>
                     </label>
                     <label style={{ display: "block" }}>
