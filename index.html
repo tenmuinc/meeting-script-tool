@@ -249,24 +249,46 @@
         setLoadingMsg("Notionページを作成・書き込み中…");
         addLog("🔍 Notion操作開始");
         try {
-          // 1. 顧客データベースからクライアントのページIDを検索
+          // 1. クライアントのページIDを顧客DBから取得
           addLog("🔍 クライアントページを検索中...");
-          const searchRes = await notionProxy(`databases/ed23c3c0e73c49b1868751bd9326d181/query`, "POST", {
-            filter: { property: "名前", title: { equals: clientName } },
-            page_size: 1,
+          const clientRes = await notionProxy(`databases/ed23c3c0e73c49b1868751bd9326d181/query`, "POST", {
+            page_size: 100,
           });
-          if (!searchRes.results || searchRes.results.length === 0) {
-            throw new Error(`「${clientName}」のページが見つかりませんでした`);
-          }
-          const parentPageId = searchRes.results[0].id;
-          addLog("✅ クライアントページ発見: " + parentPageId);
+          if (!clientRes.results) throw new Error("顧客DB取得失敗: " + JSON.stringify(clientRes).substring(0, 100));
+          const clientPage = clientRes.results.find(p => {
+            const props = p.properties;
+            const titleProp = Object.values(props).find(pr => pr.type === "title");
+            const name = titleProp?.title?.[0]?.plain_text || "";
+            return name === clientName;
+          });
+          if (!clientPage) throw new Error(`「${clientName}」のページが見つかりませんでした`);
+          const clientPageId = clientPage.id;
+          addLog("✅ クライアントページ発見");
 
-          // 2. 定例会ページを作成
-          addLog("📝 定例会ページを作成中...");
+          // 2. 議事録データベースを検索
+          addLog("🔍 議事録DBを検索中...");
+          const blocksRes = await notionProxy(`blocks/${clientPageId}/children`, "GET");
+          if (!blocksRes.results) throw new Error("ブロック取得失敗");
+          const gijiroBlock = blocksRes.results.find(b =>
+            b.type === "child_database" && b.child_database?.title?.includes("議事録")
+          );
+          if (!gijiroBlock) throw new Error("議事録データベースが見つかりませんでした");
+          const gijiroDatabaseId = gijiroBlock.id;
+          addLog("✅ 議事録DB発見");
+
+          // 3. 今日の日付
+          const today = new Date();
+          const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+
+          // 4. 議事録DBにページを作成
+          addLog("📝 議事録ページを作成中...");
+          const titleStr = `【定例会】${targetMonth.replace("年",".").replace("月","")}`;
           const newPage = await notionProxy("pages", "POST", {
-            parent: { page_id: parentPageId },
+            parent: { database_id: gijiroDatabaseId },
             properties: {
-              title: { title: [{ text: { content: `${targetMonth} 定例会` } }] },
+              "名前": { title: [{ text: { content: titleStr } }] },
+              "タグ": { multi_select: [{ name: "定例会" }] },
+              "日付": { date: { start: dateStr } },
             },
             children: [
               { object: "block", type: "heading_2", heading_2: { rich_text: [{ text: { content: "今月メモ" } }] } },
@@ -283,10 +305,9 @@
             ],
           });
 
-          if (!newPage.url) throw new Error("ページ作成に失敗しました: " + JSON.stringify(newPage).substring(0, 100));
-
+          if (!newPage.url) throw new Error("ページ作成失敗: " + JSON.stringify(newPage).substring(0, 150));
           setNotionResult(newPage.url);
-          addLog("✅ Notionページ書き込み完了");
+          addLog("✅ 議事録ページ作成完了");
           setStep(4);
         } catch (e) {
           setError(e.message);
