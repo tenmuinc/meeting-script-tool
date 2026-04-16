@@ -291,24 +291,36 @@
 
           // 2. 議事録データベースを検索（ページネーション対応）
           addLog("🔍 議事録DBを検索中...");
-          let allBlocks = [];
+          let clientBlocks = [];
           let hasMore = true;
           let startCursor = undefined;
           while (hasMore) {
             const query = startCursor ? `page_size=100&start_cursor=${startCursor}` : "page_size=100";
             const blocksRes = await notionProxy(`blocks/${clientPageId}/children?${query}`, "GET");
-            if (!blocksRes.results) throw new Error("ブロック取得失敗");
-            allBlocks = allBlocks.concat(blocksRes.results);
+            if (!blocksRes.results) throw new Error("ブロック取得失敗: " + JSON.stringify(blocksRes).substring(0, 100));
+            clientBlocks = clientBlocks.concat(blocksRes.results);
             hasMore = blocksRes.has_more;
             startCursor = blocksRes.next_cursor;
           }
-          addLog(`📋 ブロック${allBlocks.length}件取得`);
-          const databases = allBlocks.filter(b => b.type === "child_database");
-          addLog(`📋 DB${databases.length}件: ${databases.map(b => b.child_database?.title).join(", ")}`);
-          const gijiroBlock = databases.find(b =>
-            b.child_database?.title?.includes("議事録")
+          addLog(`📋 ブロック${clientBlocks.length}件取得`);
+          const databases = clientBlocks.filter(b => b.type === "child_database");
+          addLog(`📋 DB${databases.length}件: ${databases.map(b => b.child_database?.title || "(無題)").join(", ")}`);
+          // 「議事録」「定例会」「ミーティング」のいずれかを含むDBを検索
+          const KEYWORDS = ["議事録", "定例会", "ミーティング", "meeting"];
+          let gijiroBlock = databases.find(b =>
+            KEYWORDS.some(kw => b.child_database?.title?.includes(kw))
           );
-          if (!gijiroBlock) throw new Error("議事録データベースが見つかりませんでした（DB一覧: " + databases.map(b => b.child_database?.title).join(", ") + "）");
+          // 見つからない場合、唯一のDBがあればそれを使う
+          if (!gijiroBlock && databases.length === 1) {
+            gijiroBlock = databases[0];
+            addLog(`⚠️ 「議事録」DB未発見のため「${databases[0].child_database?.title || "無題"}」を使用`);
+          }
+          if (!gijiroBlock) {
+            const dbList = databases.length > 0
+              ? "DB一覧: " + databases.map(b => b.child_database?.title || "(無題)").join(", ")
+              : "このページ内にデータベースが見つかりません";
+            throw new Error(`議事録データベースが見つかりませんでした（${dbList}）`);
+          }
           const gijiroDatabaseId = gijiroBlock.id;
           addLog("✅ 議事録DB発見");
 
@@ -333,10 +345,10 @@
             { object: "block", type: "paragraph", paragraph: { rich_text: [{ text: { content: "（前回定例会のタスクを確認・追記してください）" } }] } },
             { object: "block", type: "heading_2", heading_2: { rich_text: [{ text: { content: "今月の台本" } }] } },
           ];
-          const allBlocks = [...headerBlocks, ...scriptBlocks];
+          const pageBlocks = [...headerBlocks, ...scriptBlocks];
 
           // Notion APIは1回100ブロックまで。最初の100個でページ作成、残りは追加
-          const firstBatch = allBlocks.slice(0, 100);
+          const firstBatch = pageBlocks.slice(0, 100);
           const newPage = await notionProxy("pages", "POST", {
             parent: { database_id: gijiroDatabaseId },
             properties: {
@@ -350,8 +362,8 @@
           if (!newPage.id) throw new Error("ページ作成失敗: " + JSON.stringify(newPage).substring(0, 150));
 
           // 残りのブロックを100個ずつ追加
-          for (let i = 100; i < allBlocks.length; i += 100) {
-            const batch = allBlocks.slice(i, i + 100);
+          for (let i = 100; i < pageBlocks.length; i += 100) {
+            const batch = pageBlocks.slice(i, i + 100);
             await notionProxy(`blocks/${newPage.id}/children`, "PATCH", { children: batch });
           }
 
