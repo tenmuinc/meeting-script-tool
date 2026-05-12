@@ -304,49 +304,57 @@
           }
           addLog(`📋 ブロック${clientBlocks.length}件取得`);
           const databaseBlocks = clientBlocks.filter(b => b.type === "child_database");
-          // リンクドDBだと blocks API も databases.retrieve もタイトルが "Untitled" になりがち。
-          // ① まず retrieve で実タイトル取得を試みる
-          // ② 取れなかったら DB の中身（先頭ページ）を覗き、定例会/議事録っぽいページが入っているかで判定
+          // ナガセページ等の child_database はリンクドDBのことがあり、その場合 retrieve も query も
+          // 機能しない。なので「ページ直下を探す方式」は使わず、ワークスペース全体を search APIで
+          // "議事録" 検索して、該当クライアントに紐づくリレーション or 名前空間で本体DBを特定する。
+          addLog("🔍 ワークスペース内で議事録DBを検索...");
+          const searchRes = await notionProxy(`search`, "POST", {
+            query: "議事録",
+            filter: { value: "database", property: "object" },
+            page_size: 20,
+          });
+          if (!searchRes.results) throw new Error("search失敗: " + JSON.stringify(searchRes).substring(0, 150));
           const KEYWORDS = ["議事録", "定例会", "ミーティング", "meeting"];
-          const databases = await Promise.all(databaseBlocks.map(async b => {
-            let realTitle = b.child_database?.title || "";
-            try {
-              const dbRes = await notionProxy(`databases/${b.id}`, "GET");
-              const fetched = (dbRes.title || []).map(t => t.plain_text || "").join("").trim();
-              if (fetched) realTitle = fetched;
-            } catch (e) { /* ignore */ }
-            // 中身からヒントを得る
-            let sampleHit = false;
-            let sampleTitles = [];
-            try {
-              const qRes = await notionProxy(`databases/${b.id}/query`, "POST", { page_size: 5 });
-              if (qRes.results) {
-                for (const p of qRes.results) {
-                  const tp = Object.values(p.properties || {}).find(pr => pr.type === "title");
-                  const t = (tp?.title || []).map(x => x.plain_text || "").join("");
-                  if (t) sampleTitles.push(t);
-                  if (t && KEYWORDS.some(kw => t.includes(kw))) sampleHit = true;
-                }
-              }
-            } catch (e) { /* ignore */ }
-            return { block: b, id: b.id, title: realTitle || "(無題)", sampleHit, sampleTitles };
-          }));
-          addLog(`📋 DB${databases.length}件: ${databases.map(d => d.title + (d.sampleHit ? "★" : "")).join(", ")}`);
-          // 判定: ① タイトルがキーワード一致 ② サンプルページに定例会/議事録が含まれる
-          let gijiro = databases.find(d => KEYWORDS.some(kw => d.title.includes(kw)));
-          if (!gijiro) gijiro = databases.find(d => d.sampleHit);
-          if (!gijiro && databases.length === 1) {
-            gijiro = databases[0];
-            addLog(`⚠️ 「議事録」DB未発見のため「${gijiro.title}」を使用`);
+          const gijiroCandidates = searchRes.results.filter(d => {
+            const t = (d.title || []).map(x => x.plain_text || "").join("");
+            return KEYWORDS.some(kw => t.includes(kw));
+          });
+          addLog(`📋 議事録系DB ${gijiroCandidates.length}件 ヒット`);
+          if (gijiroCandidates.length === 0) {
+            throw new Error(`ワークスペースに議事録/定例会DBが見つかりませんでした（child_database ブロック: ${databaseBlocks.length}件、search結果: ${searchRes.results.length}件）`);
           }
-          if (!gijiro) {
-            const dbList = databases.length > 0
-              ? "DB候補: " + databases.map(d => `${d.title}[${(d.sampleTitles[0]||"空")}]`).join(", ")
-              : "このページ内にデータベースが見つかりません";
-            throw new Error(`議事録データベースが見つかりませんでした（${dbList}）`);
+          // 候補が複数あるときは、クライアント名を含むDB or 該当クライアントへの relation を持つDBを優先
+          let gijiroDb = null;
+          for (const d of gijiroCandidates) {
+            const t = (d.title || []).map(x => x.plain_text || "").join("");
+            if (t.includes(clientName)) { gijiroDb = d; break; }
           }
-          const gijiroDatabaseId = gijiro.block.id;
-          addLog("✅ 議事録DB発見");
+          if (!gijiroDb) {
+            // relation で クライアントDB を参照しているもの優先
+            for (const d of gijiroCandidates) {
+              const props = d.properties || {};
+              const hasClientRelation = Object.values(props).some(p =>
+                p.type === "relation" && p.relation && p.relation.database_id &&
+                p.relation.database_id.replace(/-/g,"") === "ed23c3c0e73c49b1868751bd9326d181"
+              );
+              if (hasClientRelation) { gijiroDb = d; break; }
+            }
+          }
+          if (!gijiroDb) gijiroDb = gijiroCandidates[0];
+          const gijiroDatabaseId = gijiroDb.id;
+          const gijiroTitle = (gijiroDb.title || []).map(x => x.plain_text || "").join("") || "(無題)";
+          addLog(`✅ 議事録DB発見: ${gijiroTitle}`);
+          // クライアントへの relation プロパティ名を特定（後で properties に追加するため）
+          let clientRelationProp = null;
+          const dbProps = gijiroDb.properties || {};
+          for (const [propName, propDef] of Object.entries(dbProps)) {
+            if (propDef.type === "relation" && propDef.relation && propDef.relation.database_id &&
+                propDef.relation.database_id.replace(/-/g,"") === "ed23c3c0e73c49b1868751bd9326d181") {
+              clientRelationProp = propName;
+              break;
+            }
+          }
+          if (clientRelationProp) addLog(`🔗 クライアントrelation: ${clientRelationProp}`);
 
           // 3. 今日の日付
           const today = new Date();
@@ -373,13 +381,25 @@
 
           // Notion APIは1回100ブロックまで。最初の100個でページ作成、残りは追加
           const firstBatch = pageBlocks.slice(0, 100);
+          // DBスキーマから title プロパティ名を特定（"名前" 固定だと壊れる可能性があるため）
+          let titlePropName = "名前";
+          for (const [pname, pdef] of Object.entries(dbProps)) {
+            if (pdef.type === "title") { titlePropName = pname; break; }
+          }
+          const pageProperties = {};
+          pageProperties[titlePropName] = { title: [{ text: { content: titleStr } }] };
+          if (dbProps["タグ"] && dbProps["タグ"].type === "multi_select") {
+            pageProperties["タグ"] = { multi_select: [{ name: "定例会" }] };
+          }
+          if (dbProps["日付"] && dbProps["日付"].type === "date") {
+            pageProperties["日付"] = { date: { start: dateStr } };
+          }
+          if (clientRelationProp) {
+            pageProperties[clientRelationProp] = { relation: [{ id: clientPageId }] };
+          }
           const newPage = await notionProxy("pages", "POST", {
             parent: { database_id: gijiroDatabaseId },
-            properties: {
-              "名前": { title: [{ text: { content: titleStr } }] },
-              "タグ": { multi_select: [{ name: "定例会" }] },
-              "日付": { date: { start: dateStr } },
-            },
+            properties: pageProperties,
             children: firstBatch,
           });
 
