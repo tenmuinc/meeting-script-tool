@@ -304,31 +304,44 @@
           }
           addLog(`📋 ブロック${clientBlocks.length}件取得`);
           const databaseBlocks = clientBlocks.filter(b => b.type === "child_database");
-          // blocks APIが返す child_database.title は inline DB だと "Untitled" になりがちなので、
-          // 各DBを databases/{id} で個別に取得して実タイトルを得る
+          // リンクドDBだと blocks API も databases.retrieve もタイトルが "Untitled" になりがち。
+          // ① まず retrieve で実タイトル取得を試みる
+          // ② 取れなかったら DB の中身（先頭ページ）を覗き、定例会/議事録っぽいページが入っているかで判定
+          const KEYWORDS = ["議事録", "定例会", "ミーティング", "meeting"];
           const databases = await Promise.all(databaseBlocks.map(async b => {
             let realTitle = b.child_database?.title || "";
             try {
               const dbRes = await notionProxy(`databases/${b.id}`, "GET");
               const fetched = (dbRes.title || []).map(t => t.plain_text || "").join("").trim();
               if (fetched) realTitle = fetched;
-            } catch (e) { /* fall back to block-level title */ }
-            return { block: b, title: realTitle || "(無題)" };
+            } catch (e) { /* ignore */ }
+            // 中身からヒントを得る
+            let sampleHit = false;
+            let sampleTitles = [];
+            try {
+              const qRes = await notionProxy(`databases/${b.id}/query`, "POST", { page_size: 5 });
+              if (qRes.results) {
+                for (const p of qRes.results) {
+                  const tp = Object.values(p.properties || {}).find(pr => pr.type === "title");
+                  const t = (tp?.title || []).map(x => x.plain_text || "").join("");
+                  if (t) sampleTitles.push(t);
+                  if (t && KEYWORDS.some(kw => t.includes(kw))) sampleHit = true;
+                }
+              }
+            } catch (e) { /* ignore */ }
+            return { block: b, id: b.id, title: realTitle || "(無題)", sampleHit, sampleTitles };
           }));
-          addLog(`📋 DB${databases.length}件: ${databases.map(d => d.title).join(", ")}`);
-          // 「議事録」「定例会」「ミーティング」のいずれかを含むDBを検索
-          const KEYWORDS = ["議事録", "定例会", "ミーティング", "meeting"];
-          let gijiro = databases.find(d =>
-            KEYWORDS.some(kw => d.title.includes(kw))
-          );
-          // 見つからない場合、唯一のDBがあればそれを使う
+          addLog(`📋 DB${databases.length}件: ${databases.map(d => d.title + (d.sampleHit ? "★" : "")).join(", ")}`);
+          // 判定: ① タイトルがキーワード一致 ② サンプルページに定例会/議事録が含まれる
+          let gijiro = databases.find(d => KEYWORDS.some(kw => d.title.includes(kw)));
+          if (!gijiro) gijiro = databases.find(d => d.sampleHit);
           if (!gijiro && databases.length === 1) {
             gijiro = databases[0];
             addLog(`⚠️ 「議事録」DB未発見のため「${gijiro.title}」を使用`);
           }
           if (!gijiro) {
             const dbList = databases.length > 0
-              ? "DB一覧: " + databases.map(d => d.title).join(", ")
+              ? "DB候補: " + databases.map(d => `${d.title}[${(d.sampleTitles[0]||"空")}]`).join(", ")
               : "このページ内にデータベースが見つかりません";
             throw new Error(`議事録データベースが見つかりませんでした（${dbList}）`);
           }
