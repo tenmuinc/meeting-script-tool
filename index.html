@@ -303,25 +303,36 @@
             startCursor = blocksRes.next_cursor;
           }
           addLog(`📋 ブロック${clientBlocks.length}件取得`);
-          const databases = clientBlocks.filter(b => b.type === "child_database");
-          addLog(`📋 DB${databases.length}件: ${databases.map(b => b.child_database?.title || "(無題)").join(", ")}`);
+          const databaseBlocks = clientBlocks.filter(b => b.type === "child_database");
+          // blocks APIが返す child_database.title は inline DB だと "Untitled" になりがちなので、
+          // 各DBを databases/{id} で個別に取得して実タイトルを得る
+          const databases = await Promise.all(databaseBlocks.map(async b => {
+            let realTitle = b.child_database?.title || "";
+            try {
+              const dbRes = await notionProxy(`databases/${b.id}`, "GET");
+              const fetched = (dbRes.title || []).map(t => t.plain_text || "").join("").trim();
+              if (fetched) realTitle = fetched;
+            } catch (e) { /* fall back to block-level title */ }
+            return { block: b, title: realTitle || "(無題)" };
+          }));
+          addLog(`📋 DB${databases.length}件: ${databases.map(d => d.title).join(", ")}`);
           // 「議事録」「定例会」「ミーティング」のいずれかを含むDBを検索
           const KEYWORDS = ["議事録", "定例会", "ミーティング", "meeting"];
-          let gijiroBlock = databases.find(b =>
-            KEYWORDS.some(kw => b.child_database?.title?.includes(kw))
+          let gijiro = databases.find(d =>
+            KEYWORDS.some(kw => d.title.includes(kw))
           );
           // 見つからない場合、唯一のDBがあればそれを使う
-          if (!gijiroBlock && databases.length === 1) {
-            gijiroBlock = databases[0];
-            addLog(`⚠️ 「議事録」DB未発見のため「${databases[0].child_database?.title || "無題"}」を使用`);
+          if (!gijiro && databases.length === 1) {
+            gijiro = databases[0];
+            addLog(`⚠️ 「議事録」DB未発見のため「${gijiro.title}」を使用`);
           }
-          if (!gijiroBlock) {
+          if (!gijiro) {
             const dbList = databases.length > 0
-              ? "DB一覧: " + databases.map(b => b.child_database?.title || "(無題)").join(", ")
+              ? "DB一覧: " + databases.map(d => d.title).join(", ")
               : "このページ内にデータベースが見つかりません";
             throw new Error(`議事録データベースが見つかりませんでした（${dbList}）`);
           }
-          const gijiroDatabaseId = gijiroBlock.id;
+          const gijiroDatabaseId = gijiro.block.id;
           addLog("✅ 議事録DB発見");
 
           // 3. 今日の日付
